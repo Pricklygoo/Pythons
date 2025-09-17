@@ -345,12 +345,18 @@
         }
         function startMenuMusic() {
             if (!audioInitialized) return;
+            if (Tone.Transport.state !== 'started') {
+                Tone.Transport.start();
+            }
             stopAllMusic();
             Tone.Transport.bpm.rampTo(100, 1);
             menuLoop.start(Tone.now());
         }
         function startGameMusic() {
             if (!audioInitialized) return;
+            if (Tone.Transport.state !== 'started') {
+                Tone.Transport.start();
+            }
             stopAllMusic();
             Tone.Transport.bpm.rampTo(140, 1);
             gameBassLoop.start(Tone.now()); gameMelodyLoop.start(Tone.now()); gameKickLoop.start(Tone.now()); gameSnareLoop.start(Tone.now());
@@ -774,7 +780,4 @@
 
 </body>
 </html>
-
-
-
 
