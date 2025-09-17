@@ -16,6 +16,18 @@
             overflow: hidden;
             touch-action: none;
         }
+        #menu-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+        }
+        #menu-screen {
+            position: relative;
+            z-index: 1;
+        }
         .pixelated {
             image-rendering: pixelated;
         }
@@ -38,6 +50,9 @@
             background-color: #000;
             border: 4px solid #444;
             box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+        #game-canvas {
+             border: 4px solid #444;
         }
         .btn-primary {
             background-color: #0fa;
@@ -72,11 +87,52 @@
             justify-content: center;
             z-index: 10;
         }
+        /* Custom Slider Styles */
+        .score-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 12px;
+            background: #222;
+            outline: none;
+            border: 2px solid #444;
+            transition: opacity .2s;
+        }
+        .score-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 24px;
+            height: 24px;
+            background: #0fa;
+            cursor: pointer;
+            border: 2px solid #121212;
+            box-shadow: 0 0 10px #0fa;
+        }
+        .score-slider::-moz-range-thumb {
+            width: 24px;
+            height: 24px;
+            background: #0fa;
+            cursor: pointer;
+            border: 2px solid #121212;
+            box-shadow: 0 0 10px #0fa;
+        }
+        .bgm-toggle {
+            color: #aaa;
+            background: none;
+            border: none;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+        .bgm-toggle:hover {
+            color: #fff;
+        }
     </style>
 </head>
 <body class="flex items-center justify-center min-h-screen">
 
-    <div id="container" class="w-full h-screen flex flex-col items-center justify-center p-4">
+    <div id="container" class="w-full h-screen flex flex-col items-center justify-center p-4 relative">
+        
+        <canvas id="menu-canvas"></canvas>
 
         <!-- Menu Screen -->
         <div id="menu-screen" class="hidden text-center">
@@ -94,12 +150,20 @@
 
             <div class="mb-8 max-w-md mx-auto">
                 <h3 class="text-xl mb-4">Score to Win: <span id="score-display">30</span></h3>
-                <input id="score-slider" type="range" min="10" max="80" value="30" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                <input id="score-slider" type="range" min="10" max="80" value="30" class="score-slider">
             </div>
 
-            <button id="start-game-btn" class="btn-primary text-3xl font-bold py-4 px-10 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed" disabled>
-                Start Game
-            </button>
+            <div class="w-full max-w-4xl mx-auto mb-8 flex items-center h-20">
+                <div class="flex-1"></div>
+                <button id="start-game-btn" class="btn-primary text-3xl font-bold py-4 px-10 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap" disabled>
+                    Start Game
+                </button>
+                <div class="flex-1 text-center">
+                     <button id="bgm-toggle-menu" class="bgm-toggle text-lg p-2 whitespace-nowrap">
+                        <span id="bgm-text-menu">BGM: ON</span>
+                    </button>
+                </div>
+            </div>
             
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-12 max-w-6xl mx-auto">
                 <!-- Player 1 Controls -->
@@ -149,6 +213,7 @@
                 <div class="flex flex-col gap-4">
                      <button id="restart-btn" class="btn-primary text-2xl font-bold py-3 px-8 rounded-xl">Restart</button>
                      <button id="exit-btn" class="btn-primary text-2xl font-bold py-3 px-8 rounded-xl">Exit to Menu</button>
+                     <button id="bgm-toggle-pause" class="btn-primary text-2xl font-bold py-3 px-8 rounded-xl"><span id="bgm-text-pause">BGM: ON</span></button>
                 </div>
             </div>
         </div>
@@ -168,13 +233,17 @@
         const scoreDisplay = document.getElementById('score-display');
         const scoreboard = document.getElementById('scoreboard');
         const winnerText = document.getElementById('winner-text');
-        const canvas = document.getElementById('game-canvas');
-        const ctx = canvas.getContext('2d');
-        
+        const gameCanvas = document.getElementById('game-canvas');
+        const gameCtx = gameCanvas.getContext('2d');
+        const menuCanvas = document.getElementById('menu-canvas');
+        const menuCtx = menuCanvas.getContext('2d');
         const insultText = document.getElementById('insult-text');
         const playAgainBtnWin = document.getElementById('play-again-btn-win');
         const exitBtnWin = document.getElementById('exit-btn-win');
-
+        const bgmToggleMenu = document.getElementById('bgm-toggle-menu');
+        const bgmTextMenu = document.getElementById('bgm-text-menu');
+        const bgmTogglePause = document.getElementById('bgm-toggle-pause');
+        const bgmTextPause = document.getElementById('bgm-text-pause');
 
         // --- Game Configuration ---
         const TILE_SIZE = 20;
@@ -194,23 +263,73 @@
         let isPaused = false;
         let lastFrameTime = 0;
         
+        // --- Menu Animation ---
+        let bgSnake;
+        let menuAnimationId;
+        let menuFrameCounter = 0;
+
         // --- Audio ---
         let uiSynth, foodSynth, errorSynth, winSynth, powerupSynth;
+        let menuSynth, gameBassSynth, gameMelodySynth, gameKickSynth, gameSnareSynth;
+        let menuLoop, gameBassLoop, gameMelodyLoop, gameKickLoop, gameSnareLoop;
         let audioInitialized = false;
+        let isMusicMuted = false;
+        let musicBus;
 
         function initializeAudio() {
             if (audioInitialized) return;
             Tone.start();
+
+            musicBus = new Tone.Volume(-6).toDestination();
+
+            // SFX Synths
             uiSynth = new Tone.Synth({ oscillator: { type: 'triangle' }, envelope: { attack: 0.005, decay: 0.1, sustain: 0.3, release: 0.1 } }).toDestination();
             foodSynth = new Tone.Synth({ oscillator: { type: 'sine' }, envelope: { attack: 0.001, decay: 0.1, sustain: 0.1, release: 0.1 } }).toDestination();
             errorSynth = new Tone.MembraneSynth().toDestination();
             winSynth = new Tone.PolySynth(Tone.Synth).toDestination();
-            powerupSynth = new Tone.FMSynth({
-                harmonicity: 3,
-                modulationIndex: 10,
-                envelope: { attack: 0.01, decay: 0.2 },
-                modulationEnvelope: { attack: 0.05, decay: 0.1 }
-            }).toDestination();
+            powerupSynth = new Tone.FMSynth({ harmonicity: 3, modulationIndex: 10, envelope: { attack: 0.01, decay: 0.2 }, modulationEnvelope: { attack: 0.05, decay: 0.1 } }).toDestination();
+            
+            // Music Synths
+            const reverb = new Tone.Reverb(0.7).connect(musicBus);
+            menuSynth = new Tone.FMSynth({ harmonicity: 0.5, modulationIndex: 5, envelope: { attack: 0.01, decay: 0.5, release: 1 }, modulationEnvelope: { attack: 0.01, decay: 0.2, release: 1 } }).connect(reverb);
+            gameBassSynth = new Tone.MembraneSynth({ pitchDecay: 0.01, octaves: 4, envelope: { attack: 0.001, decay: 0.2, sustain: 0 } }).connect(musicBus);
+            gameMelodySynth = new Tone.AMSynth({ harmonicity: 1.5, envelope: { attack: 0.01, decay: 0.2, release: 0.1 }, modulationEnvelope: { attack: 0.01, decay: 0.1, release: 0.1 } }).connect(musicBus);
+            gameKickSynth = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 10, envelope: { attack: 0.001, decay: 0.4, sustain: 0.01, release: 1.4, attackCurve: 'exponential' } }).connect(musicBus);
+            gameSnareSynth = new Tone.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.005, decay: 0.1, sustain: 0 } }).connect(musicBus);
+
+            // Music Loops
+            const menuNotes = [ "C3", "E3", "G3", "B3", "A3", "C4", "E4", "G4", "F3", "A3", "C4", "E4", "G3", "B3", "D4", "F4" ];
+            menuLoop = new Tone.Sequence((time, note) => { menuSynth.triggerAttackRelease(note, "8n", time); }, menuNotes, "4n").start(0);
+            
+            const gameBassNotes = [
+                "C2", null, "C2", "G1", "C2", null, "C2", "F1", "C2", null, "C2", "G1", "C2", null, "D2", null,
+                "G1", null, "G1", "D1", "G1", null, "G1", "C1", "G1", null, "G1", "D1", "G1", null, "B1", null,
+                "A1", null, "A1", "E1", "A1", null, "A1", "D1", "A1", null, "A1", "E1", "A1", null, "C2", null,
+                "F1", null, "F1", "C1", "F1", null, "F1", "A#0", "F1", null, "F1", "C1", "F1", null, "A1", null,
+            ];
+            gameBassLoop = new Tone.Sequence((time, note) => { if (note) gameBassSynth.triggerAttackRelease(note, "8n", time); }, gameBassNotes, "8n").start(0);
+            
+            const gameMelodyNotes = [
+                "G4", null, "A4", "C5", null, "A4", "G4", null, "E4", null, "F4", "A4", null, "G4", "E4", null,
+                "D5", null, "B4", "G4", null, "B4", "D5", null, "F#4", null, "G4", "B4", null, "A4", "G4", null,
+                "A4", null, "C5", "E5", null, "C5", "A4", null, "G4", null, "A4", "C5", null, "B4", "A4", null,
+                "C5", null, "A4", "F4", null, "A4", "C5", "A4", "G4", null, "A4", "F4", null, "E4", "F4", null,
+            ];
+            gameMelodyLoop = new Tone.Sequence((time, note) => { if (note) gameMelodySynth.triggerAttackRelease(note, "16n", time); }, gameMelodyNotes, "8n").start(0);
+
+            const gameKickNotes = [
+                "C1", null, "C1", null, "C1", null, "C1", null, "C1", null, "C1", null, "C1", null, "C1", null,
+                "C1", null, "C1", null, "C1", null, "C1", null, "C1", null, "C1", "C1", "C1", null, "C1", "C1",
+            ];
+            gameKickLoop = new Tone.Sequence((time, note) => { if(note) gameKickSynth.triggerAttackRelease(note, "8n", time); }, gameKickNotes, "4n").start(0);
+
+            const gameSnareNotes = [
+                null, null, "C5", null, null, null, "C5", null, null, null, "C5", null, null, null, "C5", null,
+                null, null, "C5", null, null, null, "C5", null, null, null, "C5", null, "C5", null, "C5", "C5",
+            ];
+            gameSnareLoop = new Tone.Sequence((time, note) => { if (note) gameSnareSynth.triggerAttackRelease("8n", time); }, gameSnareNotes, "4n").start(0);
+            
+            Tone.Transport.start();
             audioInitialized = true;
         }
 
@@ -220,67 +339,79 @@
         function playWinSound() { if (winSynth) { const now = Tone.now(); winSynth.triggerAttackRelease(["C4", "E4", "G4", "C5"], "8n", now); } }
         function playPowerupSound() { if (powerupSynth) powerupSynth.triggerAttackRelease("A4", "4n"); }
 
-
-        const insults = [
-            "Guess you couldn't handle the python's charm! Too slow!",
-            "Looks like you got constricted by the competition.",
-            "Were you shedding your skin? You were moving so slowly!",
-            "You've been out-hissed! Better luck next time.",
-            "A python's pace is too much for you, I see.",
-            "You really bit off more than you could chew.",
-            "That was a crushing defeat. Literally.",
-            "You need to shed that slow-moving strategy.",
-            "Someone's been charmed, and it wasn't the snake.",
-            "Did you get lost in the undergrowth?",
-            "You're not cold-blooded, just slow-blooded.",
-            "Your chances of winning are boa-constrictedly small.",
-            "Don't be rattled, try again!",
-            "Looks like you got coiled up in your own plans.",
-            "You moved with the speed of a digesting python.",
-            "Maybe try being less slithery and more speedy.",
-            "Fang-tastic effort, but not fast enough.",
-            "You've been scaled down to size.",
-            "That performance was a bit of a drag-on.",
-            "You met your anacon-demise!"
-        ];
-
-        const PLAYER_CONFIG = [
-            { color: '#34D399', controls: { 'KeyW': 'up', 'KeyS': 'down', 'KeyA': 'left', 'KeyD': 'right' } },
-            { color: '#F87171', controls: { 'KeyI': 'up', 'KeyK': 'down', 'KeyJ': 'left', 'KeyL': 'right' } },
-            { color: '#60A5FA', controls: { 'ArrowUp': 'up', 'ArrowDown': 'down', 'ArrowLeft': 'left', 'ArrowRight': 'right' } },
-            { color: '#FBBF24', controls: { 'Numpad8': 'up', 'Numpad5': 'down', 'Numpad4': 'left', 'Numpad6': 'right' } },
-        ];
+        function stopAllMusic() {
+            if (!audioInitialized) return;
+            menuLoop.stop(); gameBassLoop.stop(); gameMelodyLoop.stop(); gameKickLoop.stop(); gameSnareLoop.stop();
+        }
+        function startMenuMusic() {
+            if (!audioInitialized) return;
+            stopAllMusic();
+            Tone.Transport.bpm.rampTo(100, 1);
+            menuLoop.start(Tone.now());
+        }
+        function startGameMusic() {
+            if (!audioInitialized) return;
+            stopAllMusic();
+            Tone.Transport.bpm.rampTo(140, 1);
+            gameBassLoop.start(Tone.now()); gameMelodyLoop.start(Tone.now()); gameKickLoop.start(Tone.now()); gameSnareLoop.start(Tone.now());
+        }
         
-        window.onload = () => { menuScreen.classList.remove('hidden'); };
+        function updateBgmToggleText() {
+            const text = isMusicMuted ? 'BGM: OFF' : 'BGM: ON';
+            bgmTextMenu.textContent = text;
+            bgmTextPause.textContent = text;
+        }
 
+        function toggleMusicMute() {
+            isMusicMuted = !isMusicMuted;
+            if (musicBus) {
+                musicBus.mute = isMusicMuted;
+            }
+            updateBgmToggleText();
+        }
+
+        const insults = [ "Guess you couldn't handle the python's charm! Too slow!", "Looks like you got constricted by the competition.", "Were you shedding your skin? You were moving so slowly!", "You've been out-hissed! Better luck next time.", "A python's pace is too much for you, I see.", "You really bit off more than you could chew.", "That was a crushing defeat. Literally.", "You need to shed that slow-moving strategy.", "Someone's been charmed, and it wasn't the snake.", "Did you get lost in the undergrowth?", "You're not cold-blooded, just slow-blooded.", "Your chances of winning are boa-constrictedly small.", "Don't be rattled, try again!", "Looks like you got coiled up in your own plans.", "You moved with the speed of a digesting python.", "Maybe try being less slithery and more speedy.", "Fang-tastic effort, but not fast enough.", "You've been scaled down to size.", "That performance was a bit of a drag-on.", "You met your anacon-demise!" ];
+        const PLAYER_CONFIG = [ { color: '#34D399', controls: { 'KeyW': 'up', 'KeyS': 'down', 'KeyA': 'left', 'KeyD': 'right' } }, { color: '#F87171', controls: { 'KeyI': 'up', 'KeyK': 'down', 'KeyJ': 'left', 'KeyL': 'right' } }, { color: '#60A5FA', controls: { 'ArrowUp': 'up', 'ArrowDown': 'down', 'ArrowLeft': 'left', 'ArrowRight': 'right' } }, { color: '#FBBF24', controls: { 'Numpad8': 'up', 'Numpad5': 'down', 'Numpad4': 'left', 'Numpad6': 'right' } }, ];
+        
+        window.onload = () => {
+            showMenu();
+            updateBgmToggleText();
+        };
+
+        function showMenu() {
+            menuScreen.classList.remove('hidden');
+            menuCanvas.classList.remove('hidden');
+            startMenuAnimation();
+            if (audioInitialized) {
+                startMenuMusic();
+            }
+        }
 
         // --- Event Listeners ---
-        window.addEventListener('resize', setupCanvas);
-        document.querySelectorAll('button').forEach(button => {
-            button.addEventListener('click', () => {
+        window.addEventListener('resize', () => { setupCanvas(); setupMenuCanvas(); });
+        
+        function handleFirstInteraction() {
+            if (!audioInitialized) {
                 initializeAudio();
-                playClickSound();
-            });
-        });
-
-        playerCountSelector.addEventListener('click', (e) => {
-            if (e.target.tagName === 'BUTTON') {
-                document.querySelectorAll('.player-option').forEach(btn => btn.classList.remove('bg-green-700'));
-                e.target.classList.add('bg-green-700');
-                playerCount = parseInt(e.target.dataset.players);
-                startGameBtn.disabled = false;
+                startMenuMusic();
             }
-        });
-        scoreSlider.addEventListener('input', (e) => {
-            winningScore = parseInt(e.target.value);
-            scoreDisplay.textContent = winningScore;
-        });
+            document.removeEventListener('click', handleFirstInteraction);
+            document.removeEventListener('keydown', handleFirstInteraction);
+        }
+        document.addEventListener('click', handleFirstInteraction);
+        document.addEventListener('keydown', handleFirstInteraction);
+
+        document.querySelectorAll('button').forEach(button => { button.addEventListener('click', playClickSound); });
+        playerCountSelector.addEventListener('click', (e) => { if (e.target.tagName === 'BUTTON') { document.querySelectorAll('.player-option').forEach(btn => btn.classList.remove('bg-green-700')); e.target.classList.add('bg-green-700'); playerCount = parseInt(e.target.dataset.players); startGameBtn.disabled = false; } });
+        scoreSlider.addEventListener('input', (e) => { winningScore = parseInt(e.target.value); scoreDisplay.textContent = winningScore; });
         startGameBtn.addEventListener('click', startGame);
         playAgainBtnWin.addEventListener('click', () => { gameOverScreen.classList.add('hidden'); startGame(); });
-        exitBtnWin.addEventListener('click', () => { gameOverScreen.classList.add('hidden'); menuScreen.classList.remove('hidden'); });
+        exitBtnWin.addEventListener('click', () => { gameOverScreen.classList.add('hidden'); showMenu(); });
         restartBtn.addEventListener('click', () => { pauseScreen.classList.add('hidden'); isPaused = false; startGame(); });
-        exitBtn.addEventListener('click', () => { pauseScreen.classList.add('hidden'); isPaused = false; if (gameLoopInterval) clearInterval(gameLoopInterval); gameLoopInterval = null; gameScreen.classList.add('hidden'); menuScreen.classList.remove('hidden'); });
+        exitBtn.addEventListener('click', () => { pauseScreen.classList.add('hidden'); isPaused = false; if (gameLoopInterval) clearInterval(gameLoopInterval); gameLoopInterval = null; stopAllMusic(); gameScreen.classList.add('hidden'); showMenu(); });
         document.addEventListener('keydown', handleKeyPress);
+        bgmToggleMenu.addEventListener('click', toggleMusicMute);
+        bgmTogglePause.addEventListener('click', toggleMusicMute);
         
         // --- Game Setup ---
         function setupCanvas() {
@@ -290,8 +421,8 @@
             const availableHeight = (window.innerHeight - scoreboardHeight) * 0.9;
             tileCountX = Math.floor(availableWidth / TILE_SIZE);
             tileCountY = Math.floor(availableHeight / TILE_SIZE);
-            canvas.width = tileCountX * TILE_SIZE;
-            canvas.height = tileCountY * TILE_SIZE;
+            gameCanvas.width = tileCountX * TILE_SIZE;
+            gameCanvas.height = tileCountY * TILE_SIZE;
             if (gameLoopInterval) { drawGame(); }
         }
 
@@ -304,11 +435,7 @@
                 case 3: startPos = { x: 3, y: tileCountY - 4 }; break;
                 case 4: startPos = { x: tileCountX - 4, y: tileCountY - 4 }; break;
             }
-            return {
-                id: id, snake: [startPos], direction: 'none', nextDirection: 'none',
-                score: 0, isAlive: true, speed: GAME_SPEED, powerUpTimer: 0, lastMoveTime: 0,
-                ...config
-            };
+            return { id: id, snake: [startPos], direction: 'none', nextDirection: 'none', score: 0, isAlive: true, speed: GAME_SPEED, powerUpTimer: 0, lastMoveTime: 0, ...config };
         }
 
         function resetPlayer(player, collisionType) {
@@ -321,10 +448,7 @@
                 case 4: startPos = { x: tileCountX - 4, y: tileCountY - 4 }; break;
             }
             player.snake = [startPos];
-            player.direction = 'none';
-            player.nextDirection = 'none';
-            player.speed = GAME_SPEED;
-            player.powerUpTimer = 0;
+            player.direction = 'none'; player.nextDirection = 'none'; player.speed = GAME_SPEED; player.powerUpTimer = 0;
             if (collisionType === 'wall' || collisionType === 'self') player.score = 0;
             else if (collisionType === 'player') player.score = Math.max(0, player.score - 5);
             updateScoreboard();
@@ -332,15 +456,14 @@
 
         // --- Game Start/End ---
         function startGame() {
+            stopMenuAnimation();
+            menuCanvas.classList.add('hidden');
+            startGameMusic();
             const victoryButtons = [playAgainBtnWin, exitBtnWin];
-            victoryButtons.forEach(btn => {
-                btn.style.backgroundColor = ''; btn.style.color = '';
-                btn.style.boxShadow = ''; btn.onmouseover = null; btn.onmouseout = null;
-            });
+            victoryButtons.forEach(btn => { btn.style.backgroundColor = ''; btn.style.color = ''; btn.style.boxShadow = ''; btn.onmouseover = null; btn.onmouseout = null; });
             menuScreen.classList.add('hidden');
             gameOverScreen.classList.add('hidden');
-            gameScreen.classList.remove('hidden');
-            gameScreen.classList.add('flex');
+            gameScreen.classList.remove('hidden'); gameScreen.classList.add('flex');
             setupCanvas();
             winningScore = parseInt(scoreSlider.value);
             players = [];
@@ -354,19 +477,17 @@
         }
 
         function endGame(winner) {
+            stopAllMusic();
             playWinSound();
             clearInterval(gameLoopInterval);
             gameLoopInterval = null;
             winnerText.textContent = `Player ${winner.id} Wins!`;
             winnerText.style.color = winner.color;
             winnerText.style.textShadow = `0 0 5px #fff, 0 0 10px #fff, 0 0 20px ${winner.color}, 0 0 30px ${winner.color}, 0 0 40px ${winner.color}, 0 0 55px ${winner.color}, 0 0 75px ${winner.color}`;
-            const randomIndex = Math.floor(Math.random() * insults.length);
-            insultText.textContent = `"${insults[randomIndex]}"`;
+            insultText.textContent = `"${insults[Math.floor(Math.random() * insults.length)]}"`;
             const victoryButtons = [playAgainBtnWin, exitBtnWin];
             victoryButtons.forEach(btn => {
-                btn.style.backgroundColor = winner.color;
-                btn.style.color = '#121212';
-                btn.style.boxShadow = `0 0 15px ${winner.color}`;
+                btn.style.backgroundColor = winner.color; btn.style.color = '#121212'; btn.style.boxShadow = `0 0 15px ${winner.color}`;
                 btn.onmouseover = () => { btn.style.backgroundColor = '#FFFFFF'; btn.style.color = winner.color; btn.style.boxShadow = `0 0 25px ${winner.color}`; };
                 btn.onmouseout = () => { btn.style.backgroundColor = winner.color; btn.style.color = '#121212'; btn.style.boxShadow = `0 0 15px ${winner.color}`; };
             });
@@ -379,10 +500,12 @@
             if (!gameLoopInterval && !isPaused) return;
             isPaused = !isPaused;
             if (isPaused) {
+                Tone.Transport.pause();
                 clearInterval(gameLoopInterval);
                 gameLoopInterval = null;
                 pauseScreen.classList.remove('hidden');
             } else {
+                Tone.Transport.start();
                 lastFrameTime = Date.now();
                 pauseScreen.classList.add('hidden');
                 gameLoopInterval = setInterval(gameLoop, RENDER_INTERVAL);
@@ -391,26 +514,15 @@
 
         // --- Game Loop ---
         function gameLoop() {
-            const now = Date.now();
-            const deltaTime = now - lastFrameTime;
-            lastFrameTime = now;
-            updateGameState(deltaTime);
-            drawGame();
+            const now = Date.now(); const deltaTime = now - lastFrameTime; lastFrameTime = now;
+            updateGameState(deltaTime); drawGame();
         }
-
         function updateGameState(deltaTime) {
             updatePowerupState(deltaTime);
             players.forEach(player => movePlayer(player, deltaTime));
         }
-        
         function movePlayer(player, deltaTime) {
-            if (player.powerUpTimer > 0) {
-                player.powerUpTimer -= deltaTime;
-                if (player.powerUpTimer <= 0) {
-                    player.powerUpTimer = 0;
-                    player.speed = GAME_SPEED;
-                }
-            }
+            if (player.powerUpTimer > 0) { player.powerUpTimer -= deltaTime; if (player.powerUpTimer <= 0) { player.powerUpTimer = 0; player.speed = GAME_SPEED; } }
             if (Date.now() - player.lastMoveTime < player.speed) return;
             player.lastMoveTime = Date.now();
             if (player.nextDirection !== 'none') {
@@ -420,29 +532,18 @@
             }
             if (player.direction === 'none') return;
             const head = { ...player.snake[0] };
-            switch (player.direction) {
-                case 'up': head.y--; break;
-                case 'down': head.y++; break;
-                case 'left': head.x--; break;
-                case 'right': head.x++; break;
-            }
+            switch (player.direction) { case 'up': head.y--; break; case 'down': head.y++; break; case 'left': head.x--; break; case 'right': head.x++; break; }
             const collisionType = checkCollision(head, player);
             if (collisionType) { resetPlayer(player, collisionType); return; }
             player.snake.unshift(head);
             if (head.x === food.x && head.y === food.y) {
-                playFoodSound();
-                player.score++;
-                updateScoreboard(player.id);
+                playFoodSound(); player.score++; updateScoreboard(player.id);
                 if (player.score >= winningScore) endGame(player); else generateFood();
             } else if (powerup.active && head.x === powerup.x && head.y === powerup.y) {
-                playPowerupSound();
-                player.speed = GAME_SPEED * 0.5;
-                player.powerUpTimer = POWERUP_DURATION;
-                powerup.active = false;
+                playPowerupSound(); player.speed = GAME_SPEED * 0.5; player.powerUpTimer = POWERUP_DURATION; powerup.active = false;
             } else { player.snake.pop(); }
         }
 
-        // --- Collision, Food & Powerup Logic ---
         function checkCollision(head, currentPlayer) {
             if (head.x < 0 || head.x >= tileCountX || head.y < 0 || head.y >= tileCountY) return 'wall';
             for (let i = 1; i < currentPlayer.snake.length; i++) if (head.x === currentPlayer.snake[i].x && head.y === currentPlayer.snake[i].y) return 'self';
@@ -452,97 +553,228 @@
             }
             return false;
         }
-
         function isPositionOccupied(pos) {
             for (const p of players) for (const seg of p.snake) if (seg.x === pos.x && seg.y === pos.y) return true;
             if (food.x === pos.x && food.y === pos.y) return true;
             if (powerup.active && powerup.x === pos.x && powerup.y === pos.y) return true;
             return false;
         }
-
-        function generateItem(itemType) {
-            let position;
-            do {
-                position = { x: Math.floor(Math.random() * tileCountX), y: Math.floor(Math.random() * tileCountY) };
-            } while (isPositionOccupied(position));
-            return position;
-        }
-        
+        function generateItem(itemType) { let position; do { position = { x: Math.floor(Math.random() * tileCountX), y: Math.floor(Math.random() * tileCountY) }; } while (isPositionOccupied(position)); return position; }
         function generateFood() { food = generateItem(); }
-        
-        function updatePowerupState(deltaTime) {
-            if (powerup.active) {
-                powerup.lifespan -= deltaTime;
-                if (powerup.lifespan <= 0) powerup.active = false;
-            } else if (Math.random() < POWERUP_SPAWN_CHANCE) {
-                const pos = generateItem();
-                powerup = { active: true, x: pos.x, y: pos.y, lifespan: POWERUP_LIFESPAN, pulseState: 0 };
-            }
-        }
+        function updatePowerupState(deltaTime) { if (powerup.active) { powerup.lifespan -= deltaTime; if (powerup.lifespan <= 0) powerup.active = false; } else if (Math.random() < POWERUP_SPAWN_CHANCE) { const pos = generateItem(); powerup = { active: true, x: pos.x, y: pos.y, lifespan: POWERUP_LIFESPAN, pulseState: 0 }; } }
 
-        // --- Drawing & UI ---
         function drawGame() {
-            ctx.fillStyle = '#1a1a1a';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = '#FFFFFF'; ctx.shadowColor = '#FFFFFF'; ctx.shadowBlur = 10;
-            ctx.fillRect(food.x * TILE_SIZE, food.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+            gameCtx.clearRect(0, 0, gameCanvas.width, gameCanvas.height);
+            gameCtx.fillStyle = '#FFFFFF'; gameCtx.shadowColor = '#FFFFFF'; gameCtx.shadowBlur = 10;
+            gameCtx.fillRect(food.x * TILE_SIZE, food.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
             if (powerup.active) {
-                powerup.pulseState += 0.1;
-                const pulseSize = Math.sin(powerup.pulseState) * 2;
-                const size = TILE_SIZE + pulseSize;
-                const offset = (TILE_SIZE - size) / 2;
-                ctx.fillStyle = '#FFD700'; ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 15;
-                ctx.fillRect((powerup.x * TILE_SIZE) + offset, (powerup.y * TILE_SIZE) + offset, size, size);
+                powerup.pulseState += 0.1; const pulseSize = Math.sin(powerup.pulseState) * 2; const size = TILE_SIZE + pulseSize; const offset = (TILE_SIZE - size) / 2;
+                gameCtx.fillStyle = '#FFD700'; gameCtx.shadowColor = '#FFD700'; gameCtx.shadowBlur = 15;
+                gameCtx.fillRect((powerup.x * TILE_SIZE) + offset, (powerup.y * TILE_SIZE) + offset, size, size);
             }
             players.forEach(player => {
                 const lighterColor = (player.powerUpTimer > 0) ? lightenHexColor(player.color, 40) : null;
-                ctx.shadowColor = player.color; ctx.shadowBlur = 5;
+                gameCtx.shadowColor = player.color; gameCtx.shadowBlur = 5;
                 player.snake.forEach((segment, index) => {
-                    ctx.globalAlpha = (index === 0) ? 1.0 : 0.8;
-                    ctx.fillStyle = (lighterColor && index % 2 !== 0) ? lighterColor : player.color;
-                    ctx.fillRect(segment.x * TILE_SIZE, segment.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    gameCtx.globalAlpha = (index === 0) ? 1.0 : 0.8;
+                    gameCtx.fillStyle = (lighterColor && index % 2 !== 0) ? lighterColor : player.color;
+                    gameCtx.fillRect(segment.x * TILE_SIZE, segment.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
                 });
             });
-            ctx.globalAlpha = 1.0; ctx.shadowBlur = 0;
+            gameCtx.globalAlpha = 1.0; gameCtx.shadowBlur = 0;
         }
-
         function updateScoreboard(highlightPlayerId = null) {
             scoreboard.innerHTML = '';
             players.forEach(player => {
                 const scoreElement = document.createElement('div');
-                scoreElement.id = `player-${player.id}-score`;
-                scoreElement.className = 'player-score p-2 rounded-md';
-                scoreElement.style.color = player.color;
+                scoreElement.id = `player-${player.id}-score`; scoreElement.className = 'player-score p-2 rounded-md'; scoreElement.style.color = player.color;
                 scoreElement.textContent = `P${player.id}: ${player.score}`;
                 scoreboard.appendChild(scoreElement);
-                if (player.id === highlightPlayerId) {
-                    scoreElement.classList.add('highlight');
-                    setTimeout(() => scoreElement.classList.remove('highlight'), 300);
-                }
+                if (player.id === highlightPlayerId) { scoreElement.classList.add('highlight'); setTimeout(() => scoreElement.classList.remove('highlight'), 300); }
             });
         }
+        function lightenHexColor(hex, percent) { let r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16); const p = percent / 100; r = Math.min(255, Math.floor(r * (1 + p))); g = Math.min(255, Math.floor(g * (1 + p))); b = Math.min(255, Math.floor(b * (1 + p))); return `#${(r).toString(16).padStart(2, '0')}${(g).toString(16).padStart(2, '0')}${(b).toString(16).padStart(2, '0')}`; }
+        function handleKeyPress(e) { if (e.code === 'Escape') { e.preventDefault(); togglePause(); return; } if (isPaused) return; const isGameKey = players.some(p => p.controls[e.code]); if (isGameKey) e.preventDefault(); if (!gameLoopInterval) return; players.forEach(player => { if (player.controls[e.code]) player.nextDirection = player.controls[e.code]; }); }
         
-        function lightenHexColor(hex, percent) {
-            let r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
-            const p = percent / 100;
-            r = Math.min(255, Math.floor(r * (1 + p)));
-            g = Math.min(255, Math.floor(g * (1 + p)));
-            b = Math.min(255, Math.floor(b * (1 + p)));
-            return `#${(r).toString(16).padStart(2, '0')}${(g).toString(16).padStart(2, '0')}${(b).toString(16).padStart(2, '0')}`;
+        // --- Menu Animation Functions ---
+        function setupMenuCanvas() {
+            menuCanvas.width = window.innerWidth;
+            menuCanvas.height = window.innerHeight;
         }
 
-        // --- Input Handling ---
-        function handleKeyPress(e) {
-            if (e.code === 'Escape') { e.preventDefault(); togglePause(); return; }
-            if (isPaused) return;
-            const isGameKey = players.some(p => p.controls[e.code]);
-            if (isGameKey) e.preventDefault();
-            if (!gameLoopInterval) return;
-            players.forEach(player => { if (player.controls[e.code]) player.nextDirection = player.controls[e.code]; });
+        function startMenuAnimation() {
+            setupMenuCanvas();
+            const startX = Math.floor(menuCanvas.width / TILE_SIZE / 2);
+            const startY = Math.floor(menuCanvas.height / TILE_SIZE / 2);
+            bgSnake = {
+                body: Array.from({ length: 25 }, (_, i) => ({ x: startX - i, y: startY })),
+                direction: 'right',
+                tongue: { active: false, duration: 0, shake: 0 }
+            };
+            if (menuAnimationId) cancelAnimationFrame(menuAnimationId);
+            menuAnimate();
         }
+
+        function stopMenuAnimation() {
+            if (menuAnimationId) {
+                cancelAnimationFrame(menuAnimationId);
+                menuAnimationId = null;
+            }
+        }
+
+        function menuAnimate() {
+            menuFrameCounter++;
+            if (menuFrameCounter % 10 === 0) {
+                updateBgSnake();
+            }
+            drawBgSnake();
+            menuAnimationId = requestAnimationFrame(menuAnimate);
+        }
+
+        function updateBgSnake() {
+            // Move snake
+            const head = { ...bgSnake.body[0] };
+            switch (bgSnake.direction) {
+                case 'up': head.y--; break;
+                case 'down': head.y++; break;
+                case 'left': head.x--; break;
+                case 'right': head.x++; break;
+            }
+
+            // Wall wrapping
+            const menuTileCountX = Math.floor(menuCanvas.width / TILE_SIZE);
+            const menuTileCountY = Math.floor(menuCanvas.height / TILE_SIZE);
+            if (head.x < 0) head.x = menuTileCountX - 1;
+            if (head.x >= menuTileCountX) head.x = 0;
+            if (head.y < 0) head.y = menuTileCountY - 1;
+            if (head.y >= menuTileCountY) head.y = 0;
+
+            bgSnake.body.unshift(head);
+            bgSnake.body.pop();
+
+            // Random direction change
+            if (Math.random() < 0.1) {
+                const directions = ['up', 'down', 'left', 'right'];
+                const opposite = { up: 'down', down: 'up', left: 'right', right: 'left' };
+                let newDirection;
+                do {
+                    newDirection = directions[Math.floor(Math.random() * directions.length)];
+                } while (newDirection === opposite[bgSnake.direction]);
+                bgSnake.direction = newDirection;
+            }
+
+            // Tongue logic
+            if (bgSnake.tongue.active) {
+                bgSnake.tongue.duration--;
+                if (bgSnake.tongue.duration <= 0) bgSnake.tongue.active = false;
+            } else if (Math.random() < 0.005) {
+                bgSnake.tongue.active = true;
+                bgSnake.tongue.duration = 60; // 1 second at 60fps
+            }
+        }
+        
+        function drawBgSnake() {
+            menuCtx.clearRect(0, 0, menuCanvas.width, menuCanvas.height);
+            menuCtx.globalAlpha = 0.3;
+            menuCtx.fillStyle = '#34D399';
+            
+            // Draw body
+            bgSnake.body.forEach(seg => {
+                menuCtx.fillRect(seg.x * TILE_SIZE, seg.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+            });
+            
+            // Draw tongue
+            if (bgSnake.tongue.active) {
+                const head = bgSnake.body[0];
+                const shakeX = (Math.random() - 0.5) * 4;
+                const shakeY = (Math.random() - 0.5) * 4;
+                menuCtx.fillStyle = '#F87171'; // Red for tongue
+                
+                const TONGUE_THICKNESS = TILE_SIZE / 5;
+
+                let stemX, stemY, stemW, stemH;
+                let fork1X, fork1Y, fork1W, fork1H;
+                let fork2X, fork2Y, fork2W, fork2H;
+                
+                switch (bgSnake.direction) {
+                    case 'up':
+                        stemX = head.x * TILE_SIZE + (TILE_SIZE / 2 - TONGUE_THICKNESS / 2);
+                        stemY = (head.y - 1) * TILE_SIZE;
+                        stemW = TONGUE_THICKNESS;
+                        stemH = TILE_SIZE;
+                        
+                        fork1X = stemX - TILE_SIZE / 2 + TONGUE_THICKNESS/2;
+                        fork1Y = stemY - TILE_SIZE / 2;
+                        fork1W = TONGUE_THICKNESS;
+                        fork1H = TILE_SIZE / 2;
+                        
+                        fork2X = stemX + TILE_SIZE / 2 - TONGUE_THICKNESS/2;
+                        fork2Y = stemY - TILE_SIZE / 2;
+                        fork2W = TONGUE_THICKNESS;
+                        fork2H = TILE_SIZE / 2;
+                        break;
+                    case 'down':
+                        stemX = head.x * TILE_SIZE + (TILE_SIZE / 2 - TONGUE_THICKNESS / 2);
+                        stemY = (head.y + 1) * TILE_SIZE;
+                        stemW = TONGUE_THICKNESS;
+                        stemH = TILE_SIZE;
+                        
+                        fork1X = stemX - TILE_SIZE / 2 + TONGUE_THICKNESS/2;
+                        fork1Y = stemY + TILE_SIZE;
+                        fork1W = TONGUE_THICKNESS;
+                        fork1H = TILE_SIZE / 2;
+                        
+                        fork2X = stemX + TILE_SIZE / 2 - TONGUE_THICKNESS/2;
+                        fork2Y = stemY + TILE_SIZE;
+                        fork2W = TONGUE_THICKNESS;
+                        fork2H = TILE_SIZE / 2;
+                        break;
+                    case 'left':
+                        stemX = (head.x - 1) * TILE_SIZE;
+                        stemY = head.y * TILE_SIZE + (TILE_SIZE / 2 - TONGUE_THICKNESS / 2);
+                        stemW = TILE_SIZE;
+                        stemH = TONGUE_THICKNESS;
+                        
+                        fork1X = stemX - TILE_SIZE / 2;
+                        fork1Y = stemY - TILE_SIZE / 2 + TONGUE_THICKNESS/2;
+                        fork1W = TILE_SIZE/2;
+                        fork1H = TONGUE_THICKNESS;
+                        
+                        fork2X = stemX - TILE_SIZE / 2;
+                        fork2Y = stemY + TILE_SIZE / 2 - TONGUE_THICKNESS/2;
+                        fork2W = TILE_SIZE/2;
+                        fork2H = TONGUE_THICKNESS;
+                        break;
+                    case 'right':
+                        stemX = (head.x + 1) * TILE_SIZE;
+                        stemY = head.y * TILE_SIZE + (TILE_SIZE / 2 - TONGUE_THICKNESS / 2);
+                        stemW = TILE_SIZE;
+                        stemH = TONGUE_THICKNESS;
+                        
+                        fork1X = stemX + TILE_SIZE;
+                        fork1Y = stemY - TILE_SIZE / 2 + TONGUE_THICKNESS/2;
+                        fork1W = TILE_SIZE / 2;
+                        fork1H = TONGUE_THICKNESS;
+
+                        fork2X = stemX + TILE_SIZE;
+                        fork2Y = stemY + TILE_SIZE / 2 - TONGUE_THICKNESS/2;
+                        fork2W = TILE_SIZE / 2;
+                        fork2H = TONGUE_THICKNESS;
+                        break;
+                }
+                menuCtx.fillRect(stemX + shakeX, stemY + shakeY, stemW, stemH);
+                menuCtx.fillRect(fork1X + shakeX, fork1Y + shakeY, fork1W, fork1H);
+                menuCtx.fillRect(fork2X + shakeX, fork2Y + shakeY, fork2W, fork2H);
+            }
+            
+            menuCtx.globalAlpha = 1.0;
+        }
+
     </script>
 
 </body>
 </html>
+
+
 
 
